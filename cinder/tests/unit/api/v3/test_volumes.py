@@ -18,6 +18,7 @@ import json
 
 import fixtures
 import mock
+from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import strutils
 from six.moves import http_client
@@ -49,6 +50,8 @@ from cinder.volume import api as vol_get
 from cinder.volume import volume_types
 
 DEFAULT_AZ = "zone1:host1"
+
+CONF = cfg.CONF
 
 
 @ddt.ddt
@@ -849,9 +852,10 @@ class VolumeApiTest(test.TestCase):
         volume.create()
         return volume
 
-    def _fake_create_snapshot(self, volume_id, volume_size=1):
+    def _fake_create_snapshot(self, volume_id, volume_size=1,
+                              display_name='fake_snapshot1'):
         snap = {
-            'display_name': 'fake_snapshot1',
+            'display_name': display_name,
             'status': 'available',
             'volume_id': volume_id,
             'volume_size': volume_size
@@ -939,6 +943,45 @@ class VolumeApiTest(test.TestCase):
         req.headers = mv.get_mv_header(mv.VOLUME_REVERT)
         req.api_version_request = mv.get_api_version(
             mv.VOLUME_REVERT)
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.revert,
+                          req, fake_volume['id'],
+                          {'revert': {'snapshot_id': fake_snapshot['id']}})
+
+    @mock.patch.object(objects.Volume, 'get_latest_snapshot')
+    @mock.patch.object(volume_api.API, 'get_volume')
+    def test_volume_revert_to_latest_snapshot_true(self, mock_volume,
+                                                   mock_latest):
+        fake_volume = self._fake_create_volume()
+        fake_snapshot = self._fake_create_snapshot()
+        fake_latest_snapshot = self._fake_create_snapshot(
+            display_name='fake_snapshot2')
+        mock_volume.return_value = fake_volume
+        mock_latest.return_value = fake_latest_snapshot
+        req = fakes.HTTPRequest.blank('/v3/volumes/%s/revert'
+                                      % fake_volume['id'])
+        req.headers = mv.get_mv_hearder(mv.VOLUME_REVERT)
+        req.api_version_request = mv.get_api_version(
+            mv.VOLUME_REVERT)
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.revert,
+                          req, fake_volume['id'],
+                          {'revert': {'snapshot_id': fake_snapshot['id']}})
+
+    @mock.patch.object(objects.Volume, 'get_latest_snapshot')
+    @mock.patch.object(volume_api.API, 'get_volume')
+    def test_volume_revert_to_latest_snapshot_false(self, mock_volume,
+                                                    mock_latest):
+        fake_volume = self._fake_create_volume()
+        fake_snapshot = self._fake_create_snapshot()
+        fake_latest_snapshot = self._fake_create_snapshot(
+            display_name='fake_snapshot2')
+        mock_volume.return_value = fake_volume
+        mock_latest.return_value = fake_latest_snapshot
+        req = fakes.HTTPRequest.blank('/v3/volumes/%s/revert'
+                                      % fake_volume['id'])
+        req.headers = mv.get_mv_hearder(mv.VOLUME_REVERT)
+        req.api_version_request = mv.get_api_version(
+            mv.VOLUME_REVERT)
+        CONF.revert_to_latest_snapshot = False
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.revert,
                           req, fake_volume['id'],
                           {'revert': {'snapshot_id': fake_snapshot['id']}})

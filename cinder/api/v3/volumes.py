@@ -13,6 +13,7 @@
 
 """The volumes V3 api."""
 
+from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_log import versionutils
 import six
@@ -38,6 +39,16 @@ from cinder import objects
 from cinder.policies import volumes as policy
 from cinder import utils
 from cinder.volume import volume_types
+
+revert_opt = cfg.BoolOpt('revert_to_latest_snapshot',
+                         default=True,
+                         help='Revert the volume to the most recent snapshot '
+                              'only. If False, you can revert the volume to '
+                              'any snapshot, but verify that your volume '
+                              'driver is working properly.')
+
+CONF = cfg.CONF
+CONF.register_opt(revert_opt)
 
 LOG = logging.getLogger(__name__)
 
@@ -184,27 +195,32 @@ class VolumeController(volumes_v2.VolumeController):
         snapshot_id = body['revert'].get('snapshot_id')
         volume = self.volume_api.get_volume(context, id)
         try:
-            l_snap = volume.get_latest_snapshot()
+            if CONF.revert_to_latest_snapshot:
+                snap = volume.get_latest_snapshot()
+            else:
+                snap = self.volume_api.get_snapshot(context, snapshot_id)
         except exception.VolumeSnapshotNotFound:
             msg = _("Volume %s doesn't have any snapshots.")
             raise exc.HTTPBadRequest(explanation=msg % volume.id)
         # Ensure volume and snapshot match.
-        if snapshot_id is None or snapshot_id != l_snap.id:
-            msg = _("Specified snapshot %(s_id)s is None or not "
-                    "the latest one of volume %(v_id)s.")
+        if snapshot_id is None:
+            msg = _("Specified snapshot %(s_id)s is None")
+            raise exc.HTTPBadRequest(explanation=msg % {'s_id': snapshot_id})
+        if snapshot_id != snap.id and CONF.revert_to_latest_snapshot:
+            msg = _("Specified snapshot %(s_id)s is not the latest "
+                    "one of volume %(v_id)s.")
             raise exc.HTTPBadRequest(explanation=msg % {'s_id': snapshot_id,
                                                         'v_id': volume.id})
-        if volume.size != l_snap.volume_size:
-            msg = _("Can't revert volume %(v_id)s to its latest snapshot "
-                    "%(s_id)s. The volume size must be equal to the snapshot "
-                    "size.")
+        if volume.size != snap.volume_size:
+            msg = _("Can't revert volume %(v_id)s to snapshot %(s_id)s"
+                    "The volume size must be equal to the snapshot size.")
             raise exc.HTTPBadRequest(explanation=msg % {'s_id': snapshot_id,
                                                         'v_id': volume.id})
         try:
             msg = 'Reverting volume %(v_id)s to snapshot %(s_id)s.'
             LOG.info(msg, {'v_id': volume.id,
-                           's_id': l_snap.id})
-            self.volume_api.revert_to_snapshot(context, volume, l_snap)
+                           's_id': snap.id})
+            self.volume_api.revert_to_snapshot(context, volume, snap)
         except (exception.InvalidVolume, exception.InvalidSnapshot) as e:
             raise exc.HTTPConflict(explanation=six.text_type(e))
         except exception.VolumeSizeExceedsAvailableQuota as e:
